@@ -1,0 +1,49 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>CX-VOC Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="styles/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-white text-gray-900">
+  <div class="p-8">
+    <h1 class="text-2xl font-bold mb-4">CX-VOC Dashboard</h1>
+    <div id="dashboard">Loading...</div>
+  </div>
+
+  <script>
+    fetch("https://flash-setup-29.onrender.com/latest_data.csv")
+      .then(response => {
+        if (!response.ok) {
+          throw new Error("Failed to load CSV: " + response.statusText);
+        }
+        return response.text();
+      })
+      .then(csvText => {
+        const rows = csvText.trim().split("\n").map(row => row.split(","));
+        const headers = rows[0];
+        const data = rows.slice(1);
+        const dashboard = document.getElementById("dashboard");
+
+        let html = "<table border='1' cellpadding='5'><tr>";
+        headers.forEach(header => html += `<th>${header}</th>`);
+        html += "</tr>";
+
+        data.forEach(row => {
+          html += "<tr>";
+          row.forEach(cell => html += `<td>${cell}</td>`);
+          html += "</tr>";
+        });
+
+        html += "</table>";
+        dashboard.innerHTML = html;
+      })
+      .catch(error => {
+        document.getElementById("dashboard").innerText = "❌ Error loading data.";
+        console.error("CSV fetch error:", error);
+      });
+  </script>
+</body>
+</html>
