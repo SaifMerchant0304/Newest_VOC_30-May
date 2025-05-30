@@ -1,49 +1,1270 @@
+<script type="text/javascript">
+        
+        
+        
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
 
-<!DOCTYPE html>
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>CX-VOC Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link href="styles/tailwind.min.css" rel="stylesheet">
+  <title>CX – Voice of Customer Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prop-types/15.8.1/prop-types.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <script src="https://unpkg.com/papaparse@latest/papaparse.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chrono-node/1.3.11/chrono.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.15.0/Recharts.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-white text-gray-900">
-  <div class="p-8">
-    <h1 class="text-2xl font-bold mb-4">CX-VOC Dashboard</h1>
-    <div id="dashboard">Loading...</div>
-  </div>
+<body class="bg-gray-100 font-roboto">
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+    const { createRoot } = ReactDOM;
 
-  <script>
-    fetch("https://flash-setup-29.onrender.com/latest_data.csv")
-      .then(response => {
-        if (!response.ok) {
-          throw new Error("Failed to load CSV: " + response.statusText);
-        }
-        return response.text();
-      })
-      .then(csvText => {
-        const rows = csvText.trim().split("\n").map(row => row.split(","));
-        const headers = rows[0];
-        const data = rows.slice(1);
-        const dashboard = document.getElementById("dashboard");
+    const emotionMapping = {
+      POSITIVE: ['Satisfaction', 'Appreciation', 'Gratitude', 'Happy'],
+      NEGATIVE: ['Frustration', 'Disappointment'],
+      NEUTRAL: ['Neutral', 'Confusion']
+    };
 
-        let html = "<table border='1' cellpadding='5'><tr>";
-        headers.forEach(header => html += `<th>${header}</th>`);
-        html += "</tr>";
+    const classifyImprovementCategory = (comment) => {
+      if (!comment || typeof comment !== 'string') return 'Other';
+      const lowerComment = comment.toLowerCase();
+      if (lowerComment.includes('material issue') || lowerComment.includes('damage') || lowerComment.includes('comfort') ||
+          lowerComment.includes('wear') || lowerComment.includes('tear') || lowerComment.includes('broken') ||
+          lowerComment.includes('malfunction') || lowerComment.includes('poor craftsmanship') ||
+          lowerComment.includes('quality') || lowerComment.includes('material') || lowerComment.includes('product') ||
+          lowerComment.includes('durability') || lowerComment.includes('defect') || lowerComment.includes('faulty')) {
+        return 'Product Quality';
+      }
+      if (lowerComment.includes('helpful') || lowerComment.includes('unhelpful') || lowerComment.includes('courteous') ||
+          lowerComment.includes('uncivil') || lowerComment.includes('sales interaction') || lowerComment.includes('attentive') ||
+          lowerComment.includes('ignored') || lowerComment.includes('arrogant') || lowerComment.includes('behaviour') ||
+          lowerComment.includes('rude') || lowerComment.includes('polite') || lowerComment.includes('attitude') ||
+          lowerComment.includes('courtesy') || lowerComment.includes('professionalism')) {
+        return 'Staff Behaviour';
+      }
+      if (lowerComment.includes('offer mismatch') || lowerComment.includes('overcharged') || lowerComment.includes('discount not applied') ||
+          lowerComment.includes('pricey') || lowerComment.includes('costly') || lowerComment.includes('rip-off') ||
+          lowerComment.includes('bargain') || lowerComment.includes('price') || lowerComment.includes('cost') ||
+          lowerComment.includes('expensive') || lowerComment.includes('discount') || lowerComment.includes('deal') ||
+          lowerComment.includes('value')) {
+        return 'Pricing & Discounts';
+      }
+      if (lowerComment.includes('collection') || lowerComment.includes('variety') || lowerComment.includes('size') ||
+          lowerComment.includes('available') || lowerComment.includes('stock') || lowerComment.includes('availability')) {
+        return 'Inventory Management';
+      }
+      if (lowerComment.includes('return') || lowerComment.includes('exchange') || lowerComment.includes('refund') ||
+          lowerComment.includes('policy') || lowerComment.includes('returnable')) {
+        return 'Return & Refund Policies';
+      }
+      if (lowerComment.includes('support') || lowerComment.includes('help') || lowerComment.includes('assistance') ||
+          lowerComment.includes('responsive') || lowerComment.includes('query') || lowerComment.includes('resolution')) {
+        return 'Customer Support';
+      }
+      if (lowerComment.includes('promotion') || lowerComment.includes('offer') || lowerComment.includes('loyalty') ||
+          lowerComment.includes('deal') || lowerComment.includes('coupon') || lowerComment.includes('reward')) {
+        return 'Promotions & Offers';
+      }
+      if (lowerComment.includes('billing') || lowerComment.includes('payment') || lowerComment.includes('charge') ||
+          lowerComment.includes('overcharge') || lowerComment.includes('invoice') || lowerComment.includes('transaction')) {
+        return 'Billing & Payment Issues';
+      }
+      if (lowerComment.includes('wait') || lowerComment.includes('queue') || lowerComment.includes('delay') ||
+          lowerComment.includes('slow') || lowerComment.includes('line') || lowerComment.includes('turnaround')) {
+        return 'Wait Time / Queue Management';
+      }
+      if (lowerComment.includes('staff') || lowerComment.includes('service') || lowerComment.includes('salesman') ||
+          lowerComment.includes('experience') || lowerComment.includes('assistance') || lowerComment.includes('interaction')) {
+        return 'Store Experience';
+      }
+      return 'Other';
+    };
 
-        data.forEach(row => {
-          html += "<tr>";
-          row.forEach(cell => html += `<td>${cell}</td>`);
-          html += "</tr>";
-        });
+    const classifyEmotion = (comment, sentiment) => {
+      if (!comment || typeof comment !== 'string') return 'Neutral';
+      const lowerComment = comment.toLowerCase();
+      if (sentiment === 'POSITIVE') {
+        if (lowerComment.includes('excellent') || lowerComment.includes('great') || lowerComment.includes('awesome') || lowerComment.includes('delighted')) return 'Satisfaction';
+        if (lowerComment.includes('thank') || lowerComment.includes('appreciate')) return 'Gratitude';
+        if (lowerComment.includes('happy') || lowerComment.includes('enjoyed')) return 'Happy';
+        return 'Appreciation';
+      } else if (sentiment === 'NEGATIVE') {
+        if (lowerComment.includes('rude') || lowerComment.includes('worst') || lowerComment.includes('poor') || lowerComment.includes('frustrated')) return 'Frustration';
+        if (lowerComment.includes('disappoint') || lowerComment.includes('bad')) return 'Disappointment';
+        return 'Disappointment';
+      } else {
+        if (lowerComment.includes('confused') || lowerComment.includes('unclear') || lowerComment.includes('puzzled')) return 'Confusion';
+        return 'Neutral';
+      }
+    };
 
-        html += "</table>";
-        dashboard.innerHTML = html;
-      })
-      .catch(error => {
-        document.getElementById("dashboard").innerText = "❌ Error loading data.";
-        console.error("CSV fetch error:", error);
+    const extractKeywords = (comment) => {
+      if (!comment || typeof comment !== 'string') return [];
+      const words = comment.toLowerCase().split(/\s+/).filter(word => word.length > 3 && !['with', 'from', 'that', 'this'].includes(word));
+      const frequency = {};
+      words.forEach(word => { frequency[word] = (frequency[word] || 0) + 1; });
+      return Object.entries(frequency).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([word]) => word);
+    };
+
+    const formatDate = (isoDate) => {
+      const date = new Date(isoDate);
+      return `${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}/${date.getFullYear()}`;
+    };
+
+    const Dashboard = () => {
+      const [data, setData] = useState([]);
+      const [filters, setFilters] = useState({
+        businessName: '',
+        zone: [],
+        state: [],
+        city: [],
+        storeCode: [],
+        mallHS: [],
+        sentiment: [],
+        fy: [],
+        month: []
       });
+      const [previousFilters, setPreviousFilters] = useState(null);
+      const [isFilterOpen, setIsFilterOpen] = useState(false);
+      const [loading, setLoading] = useState(true);
+
+      useEffect(() => {
+        const csv = loadFileData("Test 4.csv");
+        Papa.parse(csv, {
+          header: true,
+          skipEmptyLines: true,
+          dynamicTyping: false,
+          transformHeader: header => header.trim().replace(/^"|"$/g, ''),
+          transform: (value, header) => {
+            let cleaned = value.trim().replace(/^"|"$/g, '');
+            if (header === 'Customer Rating') {
+              const num = parseInt(cleaned);
+              return isNaN(num) ? null : num;
+            }
+            if (header === 'Comment Date' || header === 'Comment Date_NEW') {
+              const parsedDate = chrono.parseDate(cleaned);
+              return parsedDate ? parsedDate.toISOString() : cleaned;
+            }
+            return cleaned;
+          },
+          complete: (results) => {
+            const cleanedData = results.data.map(row => {
+              let category = classifyImprovementCategory(row['Customer Response']);
+              return {
+                ...row,
+                'Customer Rating': row['Customer Rating'],
+                'Comment Date': row['Comment Date'],
+                ImprovementCategory: category,
+                Emotion: classifyEmotion(row['Customer Response'], row['Sentiment']),
+                Keywords: extractKeywords(row['Customer Response'])
+              };
+            }).filter(row => row['Customer Rating'] !== null);
+            setData(cleanedData);
+            setLoading(false);
+            const categoryCounts = cleanedData.reduce((acc, row) => {
+              acc[row.ImprovementCategory] = (acc[row.ImprovementCategory] || 0) + 1;
+              return acc;
+            }, {});
+            console.log('Category Distribution:', categoryCounts);
+          },
+          error: (err) => console.error(err)
+        });
+      }, []);
+
+      const filteredData = useMemo(() => {
+        return data.filter(row => {
+          return (
+            (!filters.businessName || row['Business Name'] === filters.businessName) &&
+            (filters.zone.length === 0 || filters.zone.includes(row['Zone'])) &&
+            (filters.state.length === 0 || filters.state.includes(row['State'])) &&
+            (filters.city.length === 0 || filters.city.includes(row['City'])) &&
+            (filters.storeCode.length === 0 || filters.storeCode.includes(row['Store Code'])) &&
+            (filters.mallHS.length === 0 || filters.mallHS.includes(row['Mall/HS'])) &&
+            (filters.sentiment.length === 0 || filters.sentiment.includes(row['Sentiment'])) &&
+            (filters.fy.length === 0 || filters.fy.includes(row['FY'])) &&
+            (filters.month.length === 0 || filters.month.includes(row['Month']))
+          );
+        });
+      }, [data, filters]);
+
+      const getUniqueValues = (key) => [...new Set(data.map(row => row[key]))].sort();
+
+      const getFilteredZones = () => getUniqueValues('Zone');
+      const getFilteredStates = () => {
+        if (filters.zone.length === 0) return getUniqueValues('State');
+        return [...new Set(data.filter(row => filters.zone.includes(row['Zone'])).map(row => row['State']))].sort();
+      };
+      const getFilteredCities = () => {
+        if (filters.zone.length === 0 && filters.state.length === 0) return getUniqueValues('City');
+        return [...new Set(data.filter(row => 
+          (filters.zone.length === 0 || filters.zone.includes(row['Zone'])) &&
+          (filters.state.length === 0 || filters.state.includes(row['State']))
+        ).map(row => row['City']))].sort();
+      };
+      const getFilteredStoreCodes = () => {
+        if (filters.zone.length === 0 && filters.state.length === 0 && filters.city.length === 0) return getUniqueValues('Store Code');
+        return [...new Set(data.filter(row => 
+          (filters.zone.length === 0 || filters.zone.includes(row['Zone'])) &&
+          (filters.state.length === 0 || filters.state.includes(row['State'])) &&
+          (filters.city.length === 0 || filters.city.includes(row['City']))
+        ).map(row => row['Store Code']))].sort();
+      };
+
+      const filterOptions = {
+        businessName: getUniqueValues('Business Name'),
+        zone: getFilteredZones(),
+        state: getFilteredStates(),
+        city: getFilteredCities(),
+        storeCode: getFilteredStoreCodes(),
+        mallHS: getUniqueValues('Mall/HS'),
+        sentiment: getUniqueValues('Sentiment'),
+        fy: getUniqueValues('FY'),
+        month: getUniqueValues('Month')
+      };
+
+      const handleFilterChange = (key, value, isChartClick = false) => {
+        let newFilters = { ...filters };
+        if (isChartClick && filters[key].includes(value)) {
+          newFilters = { ...filters, [key]: previousFilters[key] || [] };
+        } else {
+          setPreviousFilters({ ...filters });
+          if (key === 'businessName') {
+            newFilters[key] = value;
+          } else {
+            const newValues = newFilters[key].includes(value)
+              ? newFilters[key].filter(v => v !== value)
+              : [...newFilters[key], value];
+            newFilters[key] = newValues;
+          }
+        }
+        if (key === 'zone') {
+          newFilters.state = [];
+          newFilters.city = [];
+          newFilters.storeCode = [];
+        } else if (key === 'state') {
+          newFilters.city = [];
+          newFilters.storeCode = [];
+        } else if (key === 'city') {
+          newFilters.storeCode = [];
+        }
+        setFilters(newFilters);
+      };
+
+      const resetFilters = () => {
+        setFilters({
+          businessName: '',
+          zone: [],
+          state: [],
+          city: [],
+          storeCode: [],
+          mallHS: [],
+          sentiment: [],
+          fy: [],
+          month: []
+        });
+        setPreviousFilters(null);
+      };
+
+      const totalReviews = filteredData.length;
+      const negativeReviews = filteredData.filter(row => row['Sentiment'] === 'NEGATIVE').length;
+      const percentNegative = totalReviews > 0 ? ((negativeReviews / totalReviews) * 100).toFixed(1) : 0;
+      const storeRatings = {};
+      filteredData.forEach(row => {
+        const store = row['Store Code'];
+        if (!storeRatings[store]) storeRatings[store] = { total: 0, count: 0 };
+        storeRatings[store].total += row['Customer Rating'];
+        storeRatings[store].count += 1;
+      });
+      const storeAvgRatings = Object.entries(storeRatings).map(([store, { total, count }]) => ({
+        store,
+        avgRating: (total / count).toFixed(1)
+      }));
+      const bestStore = storeAvgRatings.length > 0 ? storeAvgRatings.reduce((a, b) => a.avgRating > b.avgRating ? a : b) : { store: 'N/A', avgRating: 'N/A' };
+      const lowestRated = storeAvgRatings.length > 0 ? storeAvgRatings.reduce((a, b) => a.avgRating < b.avgRating ? a : b) : { store: 'N/A', avgRating: 'N/A' };
+
+      const categoryCounts = {};
+      const categorySentimentCounts = {};
+      filteredData.forEach(row => {
+        const cat = row['ImprovementCategory'];
+        categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
+        if (!categorySentimentCounts[cat]) categorySentimentCounts[cat] = { POSITIVE: 0, NEGATIVE: 0, NEUTRAL: 0 };
+        categorySentimentCounts[cat][row['Sentiment']] = (categorySentimentCounts[cat][row['Sentiment']] || 0) + 1;
+      });
+      const topCategory = Object.entries(categoryCounts).sort((a, b) => b[1] - a[1])[0] || ['N/A', 0];
+      const topCategorySentiments = categorySentimentCounts[topCategory[0]] || { POSITIVE: 0, NEGATIVE: 0, NEUTRAL: 0 };
+      const zoneRatings = {};
+      filteredData.forEach(row => {
+        const zone = row['Zone'];
+        if (!zoneRatings[zone]) zoneRatings[zone] = { total: 0, count: 0 };
+        zoneRatings[zone].total += row['Customer Rating'];
+        zoneRatings[zone].count += 1;
+      });
+      const zoneAvgRatings = Object.entries(zoneRatings).map(([zone, { total, count }]) => ({
+        zone,
+        avgRating: (total / count).toFixed(1)
+      }));
+      const worstZone = zoneAvgRatings.length > 0 ? zoneAvgRatings.reduce((a, b) => a.avgRating < b.avgRating ? a : b) : { zone: 'N/A', avgRating: 'N/A' };
+      const topComplaint = filteredData.filter(row => row['Sentiment'] === 'NEGATIVE').reduce((acc, row) => {
+        const cat = row['ImprovementCategory'];
+        acc[cat] = (acc[cat] || 0) + 1;
+        return acc;
+      }, {});
+      const topComplaintCategory = Object.entries(topComplaint).sort((a, b) => b[1] - a[1])[0] || ['N/A', 0];
+
+      const keyDriversData = useMemo(() => {
+        return Object.entries(categoryCounts)
+          .map(([name, value]) => ({
+            name,
+            value,
+            POSITIVE: categorySentimentCounts[name]?.POSITIVE || 0,
+            NEGATIVE: categorySentimentCounts[name]?.NEGATIVE || 0,
+            NEUTRAL: categorySentimentCounts[name]?.NEUTRAL || 0
+          }))
+          .sort((a, b) => b.value - a.value)
+          .filter(item => item.name !== 'Other');
+      }, [categoryCounts, categorySentimentCounts]);
+
+      const yAxisDomain = useMemo(() => {
+        const isAnyFilterApplied = filters.businessName || 
+          filters.zone.length > 0 || 
+          filters.state.length > 0 || 
+          filters.city.length > 0 || 
+          filters.storeCode.length > 0 || 
+          filters.mallHS.length > 0 || 
+          filters.sentiment.length > 0 || 
+          filters.fy.length > 0 || 
+          filters.month.length > 0;
+        if (!isAnyFilterApplied) {
+          return [0, 5000];
+        }
+        const maxValue = Math.max(...keyDriversData.map(item => item.value), 0);
+        return [0, maxValue + 100];
+      }, [filters, keyDriversData]);
+
+      const emotionCounts = {};
+      filteredData.forEach(row => {
+        const emotion = row['Emotion'];
+        emotionCounts[emotion] = (emotionCounts[emotion] || 0) + 1;
+      });
+      const wordCloudData = useMemo(() => {
+        const requiredEmotions = ['Satisfaction', 'Neutral', 'Appreciation', 'Happy', 'Gratitude', 'Confusion', 'Frustration', 'Disappointment'];
+        const counts = requiredEmotions.map(emotion => [emotion, emotionCounts[emotion] || 0]);
+        const values = counts.map(([_, count]) => count);
+        const minValue = Math.min(...values);
+        const maxValue = Math.max(...values);
+        const minSize = 40;
+        const maxSize = 80;
+        return counts.map(([emotion, count]) => {
+          const size = minValue === maxValue ? minSize : minSize + (count - minValue) * (maxSize - minSize) / (maxValue - minValue);
+          return {
+            text: emotion,
+            value: count,
+            size,
+            color: emotion === 'Satisfaction' ? '#10b981' :
+                   emotion === 'Appreciation' ? '#22c55e' :
+                   emotion === 'Happy' ? '#34d399' :
+                   emotion === 'Gratitude' ? '#6ee7b7' :
+                   emotion === 'Neutral' ? '#f59e0b' :
+                   emotion === 'Confusion' ? '#f97316' :
+                   emotion === 'Frustration' ? '#ef4444' :
+                   emotion === 'Disappointment' ? '#dc2626' : '#6b7280'
+          };
+        });
+      }, [emotionCounts]);
+
+      const sentimentCounts = { POSITIVE: 0, NEGATIVE: 0, NEUTRAL: 0 };
+      filteredData.forEach(row => {
+        sentimentCounts[row['Sentiment']] += 1;
+      });
+      const pieData = useMemo(() => {
+        const total = Object.values(sentimentCounts).reduce((sum, val) => sum + val, 0);
+        return Object.entries(sentimentCounts).map(([name, value]) => ({
+          name,
+          value,
+          percentage: total > 0 ? ((value / total) * 100).toFixed(1) : 0
+        }));
+      }, [sentimentCounts]);
+
+      const zoneSentimentData = useMemo(() => {
+        return filterOptions.zone.map(zone => {
+          const zoneData = filteredData.filter(row => row['Zone'] === zone);
+          return {
+            zone,
+            POSITIVE: zoneData.filter(row => row['Sentiment'] === 'POSITIVE').length,
+            NEGATIVE: zoneData.filter(row => row['Sentiment'] === 'NEGATIVE').length,
+            NEUTRAL: zoneData.filter(row => row['Sentiment'] === 'NEUTRAL').length
+          };
+        });
+      }, [filteredData]);
+
+      const months = [...new Set(filteredData.map(row => row['Month']))].sort((a, b) => {
+        const monthOrder = ['K. FEB', 'L. MAR', 'A. APR'];
+        return monthOrder.indexOf(a) - monthOrder.indexOf(b);
+      });
+      const trendData = useMemo(() => {
+        return months.map(month => {
+          const monthData = filteredData.filter(row => row['Month'] === month);
+          return {
+            month,
+            POSITIVE: monthData.filter(row => row['Sentiment'] === 'POSITIVE').length,
+            NEGATIVE: monthData.filter(row => row['Sentiment'] === 'NEGATIVE').length,
+            NEUTRAL: monthData.filter(row => row['Sentiment'] === 'NEUTRAL').length
+          };
+        });
+      }, [filteredData]);
+
+      const topStores = Object.entries(filteredData.reduce((acc, row) => {
+        acc[row['Store Code']] = (acc[row['Store Code']] || 0) + 1;
+        return acc;
+      }, {})).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([store]) => store);
+      const categories = ['Store Experience', 'Product Quality', 'Inventory Management', 'Pricing & Discounts', 'Return & Refund Policies', 'Customer Support', 'Promotions & Offers', 'Billing & Payment Issues', 'Staff Behaviour', 'Wait Time / Queue Management'];
+      const shortLabels = {
+        'Store Experience': 'Store\nExp',
+        'Product Quality': 'Prod\nQlty',
+        'Inventory Management': 'Inv\nMgmt',
+        'Pricing & Discounts': 'Price\nDisc',
+        'Return & Refund Policies': 'Return\nRefund',
+        'Customer Support': 'Cust\nSupport',
+        'Promotions & Offers': 'Promo\nOffers',
+        'Billing & Payment Issues': 'Bill\nPay',
+        'Staff Behaviour': 'Staff\nBehvr',
+        'Wait Time / Queue Management': 'Wait\nQueue'
+      };
+      const heatmapData = useMemo(() => {
+        return topStores.map(store => {
+          const storeData = filteredData.filter(row => row['Store Code'] === store);
+          const rowData = { store };
+          categories.forEach(cat => {
+            const catData = storeData.filter(row => row['ImprovementCategory'] === cat);
+            const positive = catData.filter(row => row['Sentiment'] === 'POSITIVE').length;
+            const negative = catData.filter(row => row['Sentiment'] === 'NEGATIVE').length;
+            const neutral = catData.filter(row => row['Sentiment'] === 'NEUTRAL').length;
+            const total = positive + negative + neutral;
+            let sentiment = 'None';
+            let color = '#d1d5db';
+            let arrow = '-';
+            if (total > 0) {
+              if (positive >= negative && positive >= neutral) {
+                sentiment = 'POSITIVE';
+                color = '#10b981';
+                arrow = '↑';
+              } else if (negative > positive && negative >= neutral) {
+                sentiment = 'NEGATIVE';
+                color = '#ef4444';
+                arrow = '↓';
+              } else {
+                sentiment = 'NEUTRAL';
+                color = '#f59e0b';
+                arrow = '↔';
+              }
+            }
+            rowData[cat] = { count: total, sentiment, color, arrow, sampleComment: catData[0]?.['Customer Response'] || '' };
+          });
+          return rowData;
+        });
+      }, [filteredData]);
+
+      const cityCoordinates = {
+        'Hyderabad': [17.3850, 78.4867],
+        'Mumbai': [19.0760, 72.8777],
+        'Bangalore': [12.9716, 77.5946],
+        'Delhi': [28.7041, 77.1025],
+        'Chennai': [13.0827, 80.2707],
+        'Kolkata': [22.5726, 88.3639],
+        'Pune': [18.5204, 73.8567],
+        'Ahmedabad': [23.0225, 72.5714],
+        'Jaipur': [26.9124, 75.7873],
+        'Lucknow': [26.8467, 80.9462],
+        'Kochi': [9.9312, 76.2673],
+        'Surat': [21.1702, 72.8311],
+        'Bhubaneswar': [20.2961, 85.8245],
+        'Bareilly': [28.3670, 79.4304],
+        'Jamnagar': [22.4707, 70.0577],
+        'Varanasi': [25.3176, 82.9739],
+        'Raipur': [21.2514, 81.6296],
+        'Coimbatore': [11.0168, 76.9558],
+        'Hubli': [15.3647, 75.1240],
+        'Thane': [19.2183, 72.9781],
+        'Chandigarh': [30.7333, 76.7794],
+        'Patna': [25.5941, 85.1376],
+        'Gandhidham': [23.0753, 70.1337],
+        'Kannur': [11.8745, 75.3704],
+        'Nagpur': [21.1458, 79.0882],
+        'Belgaum': [15.8497, 74.4977],
+        'Secunderabad': [17.4399, 78.4983],
+        'Guwahati': [26.1445, 91.7362],
+        'Panipat': [29.3909, 76.9635],
+        'Kottayam': [9.5916, 76.5222],
+        'Kota': [25.2138, 75.8648],
+        'Thiruvananthapuram': [8.5241, 76.9366],
+        'Imphal': [24.8170, 93.9368],
+        'Patiala': [30.3398, 76.3869],
+        'Amravati': [20.9320, 77.7523],
+        'Mangalore': [12.9141, 74.8560],
+        'Udupi': [13.3409, 74.7421],
+        'Vijayawada': [16.5062, 80.6480],
+        'Ganganagar': [29.9038, 73.8772],
+        'Noida': [28.5355, 77.3910],
+        'Dehradun': [30.3165, 78.0322],
+        'Sikar': [27.6121, 75.1399],
+        'Gorakhpur': [26.7606, 83.3732],
+        'Nadiad': [22.6939, 72.8616],
+        'Asansol': [23.6833, 86.9833],
+        'Sangli': [16.8544, 74.5642],
+        'Jabalpur': [23.1815, 79.9864],
+        'Udaipur': [24.5854, 73.7125],
+        'Guntur': [16.3067, 80.4365],
+        'Bilaspur': [22.0796, 82.1391],
+        'Pathankot': [32.2733, 75.6529],
+        'Salem': [11.6643, 78.1460],
+        'Meerut': [28.9845, 77.7064],
+        'Dharwad': [15.4589, 75.0078],
+        'Bathinda': [30.2110, 74.9455],
+        'Mohali': [30.7046, 76.7179],
+        'Visakhapatnam': [17.6868, 83.2185],
+        'Nellore': [14.4426, 79.9865],
+        'Murshidabad': [24.1759, 88.2718],
+        'Calicut': [11.2588, 75.7804],
+        'Vadodara': [22.3072, 73.1812],
+        'Aurangabad': [19.8762, 75.3433],
+        'Jodhpur': [26.2389, 73.0243],
+        'Tiruchirappalli': [10.7905, 78.7047],
+        'Dindigul': [10.3673, 77.9803],
+        'Vellore': [12.9165, 79.1325],
+        'Ranchi': [23.3441, 85.3096],
+        'Jalgaon': [21.0077, 75.5626],
+        'Madurai': [9.9252, 78.1198],
+        'Kolhapur': [16.6950, 74.2317],
+        'Yamuna Nagar': [30.1290, 77.2808],
+        'Tirupati': [13.6288, 79.4192],
+        'Nashik': [19.9975, 73.7898],
+        'Anand': [22.5525, 72.9552],
+        'Kanchipuram': [12.8342, 79.7036],
+        'Nagercoil': [8.1833, 77.4119],
+        'Shivamogga': [13.9299, 75.5681],
+        'Navi Mumbai': [19.0330, 73.0297],
+        'Gulbarga': [17.3297, 76.8343],
+        'Ambala': [30.3753, 76.7821],
+        'Bhopal': [23.2599, 77.4126],
+        'Latur': [18.4088, 76.5604],
+        'Pondicherry': [11.9416, 79.8083],
+        'Siliguri': [26.7271, 88.3953],
+        'Alwar': [27.5528, 76.6346],
+        'Thiruvallur': [13.1420, 79.9090],
+        'Kollam': [8.8932, 76.6141],
+        'Dhanbad': [23.7957, 86.4304],
+        'Solapur': [17.6599, 75.9064],
+        'Moradabad': [28.8386, 78.7733],
+        'Rajkot': [22.3039, 70.8022],
+        'Vapi': [20.3893, 72.9106],
+        'Ghaziabad': [28.6692, 77.4538],
+        'Ichalkaranji': [16.6910, 74.4650],
+        'Muzaffarpur': [26.1209, 85.3647],
+        'Moga': [30.8165, 75.1717],
+        'Puttur': [12.7598, 75.2017],
+        'Rourkela': [22.2604, 84.8536],
+        'Ludhiana': [30.9000, 75.8573],
+        'Burhanpur': [21.3074, 76.2304],
+        'Jamshedpur': [22.8046, 86.2029],
+        'Malappuram': [11.0700, 76.0738],
+        'Thrissur': [10.5276, 76.2142],
+        'Gwalior': [26.2183, 78.1828],
+        'Indore': [22.7196, 75.8577],
+        'Sonipat': [28.9938, 77.0151],
+        'Ajmer': [26.4499, 74.6399],
+        'Karnal': [29.6857, 76.9905],
+        'Mysore': [12.2958, 76.6394],
+        'Allahabad': [25.4358, 81.8463],
+        'Nanded': [19.1383, 77.3210],
+        'Kozhikode': [11.2588, 75.7804],
+        'Kalyan': [19.2437, 73.1355],
+        'Aligarh': [27.8974, 78.0880],
+        'Amritsar': [31.6340, 74.8723],
+        'Kanchrapara': [22.9447, 88.4335],
+        'Gangtok': [27.3389, 88.6065],
+        'Jalandhar': [31.3260, 75.5762],
+        'Krishnanagar': [23.4009, 88.5017],
+        'Rohtak': [28.8955, 76.6066],
+        'Warangal': [17.9784, 79.5941],
+        'Gurgaon': [28.4595, 77.0266],
+        'Vizianagaram': [18.1067, 83.3956],
+        'Ghazipur': [25.5809, 83.5853],
+        'Korba': [22.3595, 82.7501],
+        'Agartala': [23.8315, 91.2868],
+        'Malegaon': [20.5537, 74.5288],
+        'Bhavnagar': [21.7645, 72.1519],
+        'Silchar': [24.8333, 92.7789],
+        'Hisar': [29.1492, 75.7217],
+        'Chikkamagaluru': [13.3167, 75.7754],
+        'Vijayapura': [16.8302, 75.7100],
+        'Solan': [30.9045, 77.0967],
+        'Kanpur': [26.4499, 80.3319],
+        'Bidar': [17.9149, 77.5046],
+        'Jorhat': [26.7465, 94.2026],
+        'Srinagar': [34.0837, 74.7973],
+        'Haldwani': [29.2183, 79.5130],
+        'Malkangiri': [18.3658, 81.8776],
+        'Manipal': [13.3567, 74.7864],
+        'Khammam': [17.2473, 80.1514],
+        'Itanagar': [27.0869, 93.6086],
+        'Azamgarh': [26.0739, 83.1859],
+        'Bellary': [15.1394, 76.9214],
+        'Panaji': [15.4909, 73.8278],
+        'Gaya': [24.7914, 85.0002],
+        'Howrah': [22.5958, 88.2636],
+        'Kakinada': [16.9891, 82.2475],
+        'Faridkot': [30.6782, 74.7550],
+        'Saharanpur': [29.9640, 77.5467],
+        'Tirunelveli': [8.7139, 77.7567],
+        'Rewa': [24.5313, 81.2950],
+        'Jammu': [32.7266, 74.8570],
+        'Satna': [24.5750, 80.8272],
+        'Hoshiarpur': [31.5143, 75.9127],
+        'Jharsuguda': [21.8553, 84.0066],
+        'Gandhinagar': [23.2156, 72.6369],
+        'Pudukkottai': [10.3797, 78.8207],
+        'Bhilwara': [25.3407, 74.6313],
+        'Dibrugarh': [27.4728, 94.9118],
+        'Shillong': [25.5788, 91.8933],
+        'Bhuj': [23.2420, 69.6669],
+        'Chittorgarh': [24.8887, 74.6269],
+        'Haridwar': [29.9457, 78.1642],
+        'Chhindwara': [22.0570, 78.9382],
+        'Angul': [20.8440, 85.1511],
+        'Hanumangarh': [29.5815, 74.3294],
+        'Dimapur': [25.9117, 93.7217],
+        'Palakkad': [10.7867, 76.6548],
+        'Jhansi': [25.4484, 78.5685],
+        'Faridabad': [28.4089, 77.3178],
+        'Berhampur': [19.3149, 84.7941],
+        'Roorkee': [29.8543, 77.8880],
+        'Dwarka': [22.2447, 68.9678],
+        'Karimnagar': [18.4386, 79.1288],
+        'Thanjavur': [10.7860, 79.1378],
+        'Kapurthala': [31.3801, 75.3872],
+        'Thiruvalla': [9.3853, 76.5750],
+        'Sambalpur': [21.4669, 83.9812],
+        'Nizamabad': [18.6722, 78.0941],
+        'Bikaner': [28.0207, 73.3078],
+        'Tezpur': [26.6528, 92.7926],
+        'Rajahmundry': [17.0005, 81.8040],
+        'Ahmednagar': [19.0948, 74.7384],
+        'Cuttack': [20.4625, 85.8828],
+        'Baramati': [18.1517, 74.5777],
+        'Bhilai': [21.1938, 81.3509],
+        'Firozpur': [30.9331, 74.6225],
+        'Tumkur': [13.3392, 77.1022],
+        'Raichur': [16.2000, 77.3463],
+        'Kashipur': [29.2104, 78.9619],
+        'Margao': [15.2832, 73.9862],
+        'Malda': [25.0108, 88.1418],
+        'Zirakpur': [30.6425, 76.8173]
+      };
+
+      const validCities = new Set([
+        'Hyderabad', 'Ahmedabad', 'Erode', 'Kochi', 'Mumbai', 'Pune', 'Chennai', 'Bangalore', 'Bharuch', 'Surat',
+        'Delhi', 'Bhubaneswar', 'Bareilly', 'Jamnagar', 'Varanasi', 'Raipur', 'Kolkata', 'Coimbatore', 'Hubli', 'Thane',
+        'Chandigarh', 'Patna', 'Gandhidham', 'Jaipur', 'Kannur', 'Nagpur', 'Belgaum', 'Secunderabad', 'Guwahati', 'Panipat',
+        'Kottayam', 'Kota', 'Thiruvananthapuram', 'Imphal', 'Patiala', 'Amravati', 'Mangalore', 'Velachery', 'Udupi', 'Vijayawada',
+        'Ganganagar', 'Noida', 'Dehradun', 'Sikar', 'Gorakhpur', 'Nadiad', 'Asansol', 'Sangli', 'Jabalpur', 'Udaipur',
+        'Guntur', 'Bilaspur', 'Pathankot', 'Salem', 'Meerut', 'Dharwad', 'Bathinda', 'Mohali', 'Visakhapatnam', 'Nellore',
+        'Murshidabad', 'Calicut', 'Vadodara', 'Aurangabad', 'Jodhpur', 'Porvorim', 'Tiruchirappalli', 'Dindigul', 'Vellore', 'Ranchi',
+        'Jalgaon', 'Madurai', 'Kolhapur', 'Lucknow', 'Yamuna Nagar', 'Tirupati', 'Nashik', 'Anand', 'Kanchipuram', 'Nagercoil',
+        'Shivamogga', 'Navi Mumbai', 'Gulbarga', 'Ambala', 'Bhopal', 'Latur', 'Pondicherry', 'Siliguri', 'Alwar', 'Thiruvallur',
+        'Kollam', 'Dhanbad', 'Trivandrum', 'Solapur', 'Moradabad', 'Rajkot', 'Vapi', 'Ghaziabad', 'Ichalkaranji', 'Muzaffarpur',
+        'Moga', 'Puttur', 'Rourkela', 'Ludhiana', 'Burhanpur', 'Jamshedpur', 'Malappuram', 'Thrissur', 'Gwalior', 'Indore',
+        'Sonipat', 'Ajmer', 'Bhucho Mandi', 'Karnal', 'Mysore', 'Allahabad', 'Nanded', 'Kozhikode', 'Kalyan', 'Aligarh',
+        'Amritsar', 'Kanchrapara', 'Gangtok', 'Jalandhar', 'Krishnanagar', 'Rohtak', 'Warangal', 'Gurgaon', 'Vizianagaram',
+        'Ghazipur', 'Korba', 'Agartala', 'Malegaon', 'Bhavnagar', 'Silchar', 'Hisar', 'Chikkamagaluru', 'Vijayapura', 'Solan',
+        'Kanpur', 'Bidar', 'Jorhat', 'Srinagar', 'Haldwani', 'Malkangiri', 'Manipal', 'Khammam', 'Itanagar', 'Azamgarh',
+        'Bellary', 'Panaji', 'Gaya', 'Howrah', 'Kakinada', 'Faridkot', 'Saharanpur', 'Tirunelveli', 'Rewa', 'Jammu',
+        'Ghaziabad', 'Satna', 'Hoshiarpur', 'Jharsuguda', 'Nasik', 'Gandhinagar', 'Pudukkottai', 'Bhilwara', 'Dibrugarh',
+        'Shillong', 'Bhuj', 'Chittorgarh', 'Haridwar', 'Chhindwara', 'Angul', 'Hanumangarh', 'Dimapur', 'Palakkad',
+        'Jhansi', 'Faridabad', 'Berhampur', 'Roorkee', 'Dwarka', 'Karimnagar', 'Thanjavur', 'Kapurthala', 'Thiruvalla',
+        'Sambalpur', 'Nizamabad', 'Bikaner', 'Tezpur', 'Rajahmundry', 'Ahmednagar', 'Cuttack', 'Baramati', 'Vijayapura',
+        'Bhilai', 'Firozpur', 'Tumkur', 'Raichur', 'Kashipur', 'Margao', 'Malda', 'Zirakpur'
+      ]);
+
+      const storeMapData = useMemo(() => {
+        const cityStatePairs = [...new Set(filteredData.map(row => row['City'] + '-' + row['State']))];
+        const mappedData = cityStatePairs
+          .map(cityState => {
+            const [city, state] = cityState.split('-');
+            if (!validCities.has(city)) return null;
+            const cityData = filteredData.filter(row => row['City'] === city && row['State'] === state);
+            const avgRating = cityData.reduce((sum, row) => sum + row['Customer Rating'], 0) / cityData.length;
+            const positive = cityData.filter(row => row['Sentiment'] === 'POSITIVE').length;
+            const negative = cityData.filter(row => row['Sentiment'] === 'NEGATIVE').length;
+            const neutral = cityData.filter(row => row['Sentiment'] === 'NEUTRAL').length;
+            let color = '#f59e0b';
+            if (positive > negative && positive >= neutral) color = '#10b981';
+            else if (negative > positive && negative >= neutral) color = '#ef4444';
+            const stores = [...new Set(cityData.map(row => row['Store Code']))];
+            const coordinates = cityCoordinates[city] || [22.0, 78.0];
+            if (!cityCoordinates[city]) {
+              console.warn(`No coordinates for city: ${city}`);
+            }
+            return {
+              city,
+              state,
+              avgRating: avgRating.toFixed(1),
+              volume: cityData.length,
+              color,
+              coordinates,
+              stores: stores.length > 5 ? [...stores.slice(0, 5), '...'] : stores
+            };
+          })
+          .filter(item => item && item.coordinates);
+        console.log('Mapped Cities:', mappedData.map(item => item.city));
+        return mappedData;
+      }, [filteredData]);
+
+      if (loading) {
+        return <div className="text-center text-xl mt-10">Loading...</div>;
+      }
+
+      const FilterDrawer = () => (
+        <div 
+          className={`fixed top-0 left-0 h-full bg-white shadow-lg p-4 w-64 transform ${isFilterOpen ? 'translate-x-0' : '-translate-x-full'} transition-transform duration-300 overflow-y-auto z-50`} 
+          aria-expanded={isFilterOpen}
+        >
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-lg font-bold">Filters</h2>
+            <button
+              className="bg-teal-500 text-white p-2 rounded hover:bg-teal-600"
+              onClick={() => setIsFilterOpen(false)}
+            >
+              Hide Filters
+            </button>
+          </div>
+          <div className="space-y-6">
+            <div className="border-b pb-4">
+              <h3 className="font-semibold mb-2">Business Name</h3>
+              <select
+                className="w-full p-2 border rounded"
+                value={filters.businessName}
+                onChange={(e) => handleFilterChange('businessName', e.target.value)}
+              >
+                <option value="">All</option>
+                {filterOptions.businessName.map(name => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+            </div>
+            {['zone', 'state', 'city', 'storeCode', 'mallHS', 'sentiment', 'fy', 'month'].map(key => (
+              <div key={key} className="border-b pb-4">
+                <h3 className="font-semibold mb-2 capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}</h3>
+                <input
+                  type="text"
+                  placeholder={`Search ${key}`}
+                  className="w-full p-2 border rounded mb-2"
+                  onChange={(e) => {}}
+                />
+                <div className="max-h-40 overflow-y-auto">
+                  {filterOptions[key].map(value => (
+                    <label key={value} className="flex items-center mb-1">
+                      <input
+                        type="checkbox"
+                        checked={filters[key].includes(value)}
+                        onChange={() => handleFilterChange(key, value)}
+                        className="mr-2"
+                      />
+                      {value}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <button
+              className="w-full bg-red-500 text-white p-2 rounded hover:bg-red-600"
+              onClick={resetFilters}
+            >
+              Reset Filters
+            </button>
+          </div>
+        </div>
+      );
+
+      const KeyDriversChart = () => {
+        const chartTitle = useMemo(() => {
+          if (filters.sentiment.length === 0) return 'Key Drivers of Customer Feedback (All Sentiments)';
+          if (filters.sentiment.length === 1) {
+            return `Key Drivers of Customer Feedback (${filters.sentiment[0].charAt(0) + filters.sentiment[0].slice(1).toLowerCase()})`;
+          }
+          return 'Key Drivers of Customer Feedback (All Sentiments)';
+        }, [filters.sentiment]);
+
+        const formatXAxis = (name) => {
+          const maxLength = 10;
+          if (name.length <= maxLength) return name;
+          const words = name.split(/(?=[A-Z\s])/);
+          let currentLine = '';
+          const lines = [];
+          words.forEach(word => {
+            if ((currentLine + word).length <= maxLength) {
+              currentLine += word;
+            } else {
+              lines.push(currentLine.trim());
+              currentLine = word;
+            }
+          });
+          if (currentLine) lines.push(currentLine.trim());
+          return lines.join('\n');
+        };
+
+        return (
+          <div className="bg-white p-4 rounded-lg shadow-sm" aria-label="Key Drivers of Customer Feedback Stacked Bar Chart">
+            <h2 className="text-lg font-bold text-blue-800 mb-2">{chartTitle}</h2>
+            <Recharts.ResponsiveContainer width="100%" height={400}>
+              <Recharts.BarChart
+                data={keyDriversData}
+                margin={{ top: 20, right: 20, bottom: 80, left: 20 }}
+                onClick={(data) => {
+                  if (data && data.activePayload) {
+                    const category = data.activePayload[0].payload.name;
+                    setFilters({ ...filters, category: [category] });
+                  }
+                }}
+              >
+                <Recharts.CartesianGrid strokeDasharray="3 3" />
+                <Recharts.XAxis
+                  dataKey="name"
+                  angle={-45}
+                  textAnchor="end"
+                  interval={0}
+                  height={80}
+                  fontSize={14}
+                  fill="#1e3a8a"
+                  tickFormatter={formatXAxis}
+                />
+                <Recharts.YAxis domain={yAxisDomain} />
+                <Recharts.Tooltip
+                  formatter={(value, name, props) => {
+                    const { payload } = props;
+                    return [
+                      `${name}: ${value}`,
+                      `Total: ${payload.value}`,
+                      `Positive: ${payload.POSITIVE}`,
+                      `Negative: ${payload.NEGATIVE}`,
+                      `Neutral: ${payload.NEUTRAL}`
+                    ];
+                  }}
+                />
+                <Recharts.Legend align="right" verticalAlign="top" />
+                <Recharts.Bar dataKey="POSITIVE" stackId="a" fill="#10b981">
+                  <Recharts.LabelList
+                    dataKey="value"
+                    position="top"
+                    fill="#000"
+                    style={{
+                      backgroundColor: '#000',
+                      padding: '2px 4px',
+                      borderRadius: '2px',
+                      fontSize: '12px',
+                      fontWeight: 'bold'
+                    }}
+                    offset={10}
+                  />
+                </Recharts.Bar>
+                <Recharts.Bar dataKey="NEGATIVE" stackId="a" fill="#ef4444" />
+                <Recharts.Bar dataKey="NEUTRAL" stackId="a" fill="#f59e0b" />
+              </Recharts.BarChart>
+            </Recharts.ResponsiveContainer>
+          </div>
+        );
+      };
+
+      const EmotionCloud = () => (
+        <div className="bg-white p-2 rounded-lg shadow-sm" aria-label="Emotion Bubble Cloud">
+          <h2 className="text-lg font-bold text-blue-800 mb-2">Emotion Bubble Cloud</h2>
+          <div className="grid grid-cols-4 gap-2 w-full">
+            {wordCloudData.map(({ text, color, size, value }, index) => (
+              <div
+                key={text}
+                className="flex items-center justify-center rounded-full max-w-full aspect-[2/1]"
+                style={{ backgroundColor: color, height: `${size}px` }}
+              >
+                <span className="text-white font-bold text-sm truncate">
+                  {text} ({value})
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+
+      const SentimentBreakdown = () => {
+        const renderCustomLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percentage, index }) => {
+          const RADIAN = Math.PI / 180;
+          const radius = outerRadius + 30;
+          const x = cx + radius * Math.cos(-midAngle * RADIAN);
+          const y = cy + radius * Math.sin(-midAngle * RADIAN);
+          return (
+            <text
+              x={x}
+              y={y}
+              fill="#1e3a8a"
+              textAnchor={x > cx ? 'start' : 'end'}
+              dominantBaseline="central"
+              fontSize="12"
+            >
+              {`${percentage}%`}
+            </text>
+          );
+        };
+
+        return (
+          <div className="bg-white p-4 rounded-lg shadow-sm" aria-label="Sentiment Breakdown Pie Chart">
+            <h2 className="text-lg font-bold text-blue-800 mb-2">Sentiment Breakdown</h2>
+            <Recharts.ResponsiveContainer width="100%" height={300}>
+              <Recharts.PieChart>
+                <Recharts.Pie
+                  data={pieData}
+                  dataKey="value"
+                  nameKey="name"
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={80}
+                  label={renderCustomLabel}
+                  labelLine={true}
+                  onClick={(data) => {
+                    if (data) {
+                      handleFilterChange('sentiment', data.name, true);
+                    }
+                  }}
+                >
+                  {pieData.map((entry, index) => (
+                    <Recharts.Cell
+                      key={`cell-${index}`}
+                      fill={entry.name === 'POSITIVE' ? '#10b981' : entry.name === 'NEGATIVE' ? '#ef4444' : '#f59e0b'}
+                    />
+                  ))}
+                </Recharts.Pie>
+                <Recharts.Legend verticalAlign="bottom" />
+                <Recharts.Tooltip formatter={(value, name) => `Sentiment: ${value} responses`} />
+              </Recharts.PieChart>
+            </Recharts.ResponsiveContainer>
+          </div>
+        );
+      };
+
+      const StoreMap = () => {
+        const mapRef = useRef(null);
+        const mapContainerRef = useRef(null);
+
+        useEffect(() => {
+          if (mapRef.current) return;
+          mapRef.current = L.map(mapContainerRef.current, {
+            center: [22.0, 78.0],
+            zoom: 5,
+            minZoom: 5,
+            maxZoom: 18,
+            zoomControl: true,
+            scrollWheelZoom: true,
+            dragging: true
+          });
+
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+            maxZoom: 18,
+            tileSize: 256
+          }).addTo(mapRef.current);
+
+          storeMapData.forEach(({ city, state, avgRating, volume, color, coordinates, stores }) => {
+            L.circleMarker(coordinates, {
+              radius: 10,
+              fillColor: color,
+              color: '#000',
+              weight: 1,
+              opacity: 1,
+              fillOpacity: 0.8
+            })
+              .addTo(mapRef.current)
+              .bindPopup(`${city}<br>Stores: ${stores.join(', ')}<br>Avg Rating: ${avgRating}<br>Feedback Volume: ${volume}`);
+          });
+
+          const legend = L.control({ position: 'bottomleft' });
+          legend.onAdd = function () {
+            const div = L.DomUtil.create('div', 'bg-white p-2 rounded shadow');
+            div.innerHTML = `
+              <div><span style="display:inline-block;width:12px;height:12px;background:#10b981;margin-right:4px;"></span>Mostly Positive</div>
+              <div><span style="display:inline-block;width:12px;height:12px;background:#ef4444;margin-right:4px;"></span>Mostly Negative</div>
+              <div><span style="display:inline-block;width:12px;height:12px;background:#f59e0b;margin-right:4px;"></span>Mostly Neutral</div>
+            `;
+            return div;
+          };
+          legend.addTo(mapRef.current);
+
+          return () => {
+            if (mapRef.current) {
+              mapRef.current.remove();
+              mapRef.current = null;
+            }
+          };
+        }, [storeMapData]);
+
+        return (
+          <div className="bg-white p-4 rounded-lg shadow-sm">
+            <h2 className="text-lg font-bold text-blue-800 mb-2">Mapped Cities with Store Feedback Sentiment – India</h2>
+            <div ref={mapContainerRef} style={{ height: '400px', width: '100%' }}></div>
+          </div>
+        );
+      };
+
+      return (
+        <div className="p-6 w-full">
+          {!isFilterOpen && (
+            <button
+              className="fixed top-4 left-4 bg-teal-500 text-white p-2 rounded hover:bg-teal-600 z-50"
+              onClick={() => setIsFilterOpen(true)}
+              aria-label="Show Filters"
+            >
+              Show Filters
+            </button>
+          )}
+          <button
+            className="fixed top-4 right-4 bg-red-500 text-white p-2 rounded hover:bg-red-600 z-50"
+            onClick={resetFilters}
+            aria-label="Reset Dashboard"
+          >
+            Reset Dashboard
+          </button>
+          <FilterDrawer />
+          <h1 className="text-2xl font-bold mb-6 text-center">CX – Voice of Customer Dashboard | Google Reviews</h1>
+
+          <div className="mb-8">
+            <h2 className="text-xl font-bold mb-4">Top Insights</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-blue-50 p-4 rounded-lg shadow">
+                <p className="text-base text-gray-700">
+                  1. Top Feedback Theme: "{keyDriversData[0]?.name || 'N/A'}" mentions. This theme received "{keyDriversData[0]?.value || 0}" mentions amongst which "{categorySentimentCounts[keyDriversData[0]?.name]?.NEGATIVE || 0}" mentions were negative and "{categorySentimentCounts[keyDriversData[0]?.name]?.POSITIVE || 0}" mentions were positive.
+                </p>
+              </div>
+              <div className="bg-blue-50 p-4 rounded-lg shadow">
+                <p className="text-base text-gray-700">2. {worstZone.zone.replace(/^Zone\s*/, '')} saw a drop in satisfaction with an avg. rating of {worstZone.avgRating}, driven by negative sentiment around {topComplaintCategory[0]}.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+            <div className="bg-white p-4 rounded-lg shadow-sm text-center">
+              <h3 className="text-lg font-bold text-blue-800">Total Reviews</h3>
+              <p className="text-3xl text-green-600">{totalReviews}</p>
+            </div>
+            <div className="bg-white p-4 rounded-lg shadow-sm text-center">
+              <h3 className="text-lg font-bold text-blue-800">% Negative</h3>
+              <p className="text-3xl text-red-600">{percentNegative}%</p>
+            </div>
+            <div className="bg-white p-4 rounded-lg shadow-sm text-center">
+              <h3 className="text-lg font-bold text-blue-800">Best Store</h3>
+              <p className="text-3xl text-green-600">{bestStore.store} ({bestStore.avgRating})</p>
+            </div>
+            <div className="bg-white p-4 rounded-lg shadow-sm text-center">
+              <h3 className="text-lg font-bold text-blue-800">Lowest Rated</h3>
+              <p className="text-3xl text-red-600">{lowestRated.store} ({lowestRated.avgRating})</p>
+            </div>
+          </div>
+
+          <div className="mb-8">
+            <KeyDriversChart />
+          </div>
+          <div className="mb-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <EmotionCloud />
+              <SentimentBreakdown />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+            <div className="bg-white p-4 rounded shadow">
+              <h2 className="text-lg font-bold text-blue-800 mb-2">Sentiment by Zone</h2>
+              <Recharts.ResponsiveContainer width="100%" height={300}>
+                <Recharts.BarChart data={zoneSentimentData}>
+                  <Recharts.CartesianGrid strokeDasharray="3 3" />
+                  <Recharts.XAxis dataKey="zone" />
+                  <Recharts.YAxis />
+                  <Recharts.Tooltip />
+                  <Recharts.Legend />
+                  <Recharts.Bar dataKey="POSITIVE" fill="#10b981" />
+                  <Recharts.Bar dataKey="NEGATIVE" fill="#ef4444" />
+                  <Recharts.Bar dataKey="NEUTRAL" fill="#f59e0b" />
+                </Recharts.BarChart>
+              </Recharts.ResponsiveContainer>
+            </div>
+            <div className="bg-white p-4 rounded shadow">
+              <h2 className="text-lg font-bold text-blue-800 mb-2">Sentiment Trend Over Time</h2>
+              <Recharts.ResponsiveContainer width="100%" height={300}>
+                <Recharts.LineChart data={trendData}>
+                  <Recharts.CartesianGrid strokeDasharray="3 3" />
+                  <Recharts.XAxis dataKey="month" />
+                  <Recharts.YAxis />
+                  <Recharts.Tooltip />
+                  <Recharts.Legend />
+                  <Recharts.Line type="monotone" dataKey="POSITIVE" stroke="#10b981" />
+                  <Recharts.Line type="monotone" dataKey="NEGATIVE" stroke="#ef4444" />
+                  <Recharts.Line type="monotone" dataKey="NEUTRAL" stroke="#f59e0b" />
+                </Recharts.LineChart>
+              </Recharts.ResponsiveContainer>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+            <div className="bg-white p-4 rounded-lg shadow-sm">
+              <h2 className="text-lg font-bold text-blue-800 mb-2">Key Feedback Drivers Across Top 10 Stores</h2>
+              <div className="flex justify-center mb-4">
+                <span className="mr-4"><span className="inline-block w-4 h-4 bg-teal-500 mr-1"></span>Positive (↑)</span>
+                <span className="mr-4"><span className="inline-block w-4 h-4 bg-red-500 mr-1"></span>Negative (↓)</span>
+                <span className="mr-4"><span className="inline-block w-4 h-4 bg-yellow-500 mr-1"></span>Neutral (↔)</span>
+                <span><span className="inline-block w-4 h-4 bg-gray-400 mr-1"></span>No Feedback (-)</span>
+              </div>
+              <div className="w-full">
+                <table className="w-full text-sm border border-gray-300 shadow-sm">
+                  <thead>
+                    <tr>
+                      <th className="p-3 border border-gray-300 text-center font-semibold">Store</th>
+                      {categories.map(cat => (
+                        <th key={cat} className="p-3 border border-gray-300 text-center whitespace-pre">{shortLabels[cat]}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {heatmapData.map(row => (
+                      <tr key={row.store}>
+                        <td className="p-3 border border-gray-300 font-semibold text-left">{row.store}</td>
+                        {categories.map(cat => (
+                          <td
+                            key={cat}
+                            className="p-3 border border-gray-300 text-center cursor-pointer hover:bg-gray-100"
+                            style={{ backgroundColor: row[cat].color }}
+                            title={row[cat].sampleComment}
+                            onClick={() => {
+                              setFilters({
+                                ...filters,
+                                storeCode: [row.store],
+                                category: [cat]
+                              });
+                            }}
+                          >
+                            <span style={{ color: row[cat].sentiment === 'POSITIVE' ? 'white' : 'black' }}>
+                              {row[cat].count > 0 ? `${row[cat].count} ${row[cat].arrow}` : row[cat].arrow}
+                            </span>
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <StoreMap />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-white p-4 rounded-lg shadow-sm">
+              <h2 className="text-lg font-bold text-blue-800 mb-2">Positive Comments (Top 15) – By Date</h2>
+              <div className="max-h-96 overflow-y-auto">
+                {filteredData
+                  .filter(row => row['Sentiment'] === 'POSITIVE')
+                  .sort((a, b) => new Date(b['Comment Date']) - new Date(a['Comment Date']))
+                  .slice(0, 15)
+                  .map((row, index) => (
+                    <div key={index} className="border-b last:border-b-0 py-2">
+                      <p className="font-bold">😊 {row['Customer Response']}</p>
+                      <p className="text-sm text-gray-600">Store: {row['Store Code']} | Date: {formatDate(row['Comment Date'])}</p>
+                    </div>
+                  ))}
+              </div>
+            </div>
+            <div className="bg-white p-4 rounded-lg shadow-sm">
+              <h2 className="text-lg font-bold text-blue-800 mb-2">Negative Comments (Top 15) – By Date</h2>
+              <div className="max-h-96 overflow-y-auto">
+                {filteredData
+                  .filter(row => row['Sentiment'] === 'NEGATIVE')
+                  .sort((a, b) => new Date(b['Comment Date']) - new Date(a['Comment Date']))
+                  .slice(0, 15)
+                  .map((row, index) => (
+                    <div key={index} className="border-b last:border-b-0 py-2">
+                      <p className="font-bold">😠 {row['Customer Response']}</p>
+                      <p className="text-sm text-gray-600">Store: {row['Store Code']} | Date: {formatDate(row['Comment Date'])}</p>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    const root = createRoot(document.getElementById('root'));
+    root.render(<Dashboard />);
   </script>
+
+<script type="text/javascript">
+  async function fetchAndLoadCSV() {
+    try {
+      const response = await fetch("https://flash-setup-29.onrender.com/latest_data.csv");
+      if (!response.ok) throw new Error("Failed to load CSV");
+      const csvText = await response.text();
+
+      window.gk_isXlsx = false;
+      window.gk_xlsxFileLookup = {"latest_data.csv": false};
+      window.gk_fileData = {"latest_data.csv": csvText};
+
+      if (typeof loadCSVData === 'function') {
+        loadCSVData();
+      } else {
+        console.warn("loadCSVData() function not found.");
+      }
+    } catch (error) {
+      console.error("CSV Fetch Error:", error);
+      document.body.insertAdjacentHTML("beforeend", "<p style='color:red;'>Failed to load live data.</p>");
+    }
+  }
+
+  fetchAndLoadCSV();
+</script>
 </body>
+
 </html>
